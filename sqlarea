@@ -1,0 +1,38 @@
+with 
+w0 as (select 	/*+materialize*/
+  				force_matching_signature,count(*) number_of_sql_ids,
+				sum(executions) executions,sum(rows_processed) rows_processed,trunc(sum(elapsed_time/1000000)) elapsed_seconds,
+				trunc(max(elapsed_time/decode(executions,0,1,executions))/1000000,4) max_seconds_per_execution,
+				trunc(sum(elapsed_time)/decode(sum(executions),0,1,sum(executions))/1000000,4) total_seconds_per_exec,
+            	stddev(elapsed_time/decode(executions,0,1,executions)) std_dev_secs_per_exec,
+				sum(fetches) fetches,sum(parse_calls) parse_calls,sum(disk_reads) disk_reads,sum(direct_writes) direct_writes,sum(direct_reads) direct_reads,
+            	sum(buffer_gets) buffer_gets, max(buffer_gets/decode(executions,0,1,executions)) max_buffer_gets_per_exec,
+                trunc(sum(application_wait_time/1000000),4) application_wait_seconds,
+                trunc(sum(concurrency_wait_time/1000000),4) concurrency_wait_seconds,
+                trunc(sum(cluster_wait_time/1000000),4)     cluster_wait_seconds,
+                trunc(sum(user_io_wait_time/1000000),4)     user_io_wait_seconds,  	
+                trunc(sum(cpu_time/1000000),4)              cpu_seconds  	
+ 		from v$sqlarea where force_matching_signature>0
+		group by force_matching_signature
+      ),
+w1 as (select   w0.*,
+  				rank() over(order by cpu_seconds              desc) cpu_seq,
+    		    rank() over(order by user_io_wait_seconds     desc) io_seq,
+    		    rank() over(order by cluster_wait_seconds     desc) gc_seq,
+    		    rank() over(order by concurrency_wait_seconds desc) concurrency_seq,
+    		    rank() over(order by max_buffer_gets_per_exec desc) max_buffer_gets_exec_seq,
+    		    rank() over(order by buffer_gets              desc) buffer_gets_seq,
+    		    rank() over(order by total_seconds_per_exec   desc) total_seconds_per_exec_seq,
+    		    rank() over(order by elapsed_seconds          desc) elapsed_seconds_seq,
+    		    rank() over(order by number_of_sql_ids        desc) number_of_sql_ids_seq,
+    		    rank() over(order by executions               desc) executions_seq
+		from w0
+		),
+w2 as (select /*+materialize*/ * from w1 where   cpu_seq<11 or io_seq<11 or gc_seq<11 or concurrency_seq<11 or max_buffer_gets_exec_seq<11 or
+  								buffer_gets_seq<11 or total_seconds_per_exec_seq<11 or elapsed_seconds_seq<11 or
+  								number_of_sql_ids_seq<11 or executions_seq<11)
+select * from w2 order by cpu_seq+io_seq+gc_seq+concurrency_seq+max_buffer_gets_exec_seq+buffer_gets_seq+total_seconds_per_exec_seq+
+                          elapsed_seconds_seq+number_of_sql_ids_seq
+                          -- executions is out of the sort on purpose, since it will be present somehow in other metrics
+                          -- if you want give more power to one metric just divide it by something e.g. cpu_seq/10+.... 
+;
